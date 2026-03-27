@@ -132,6 +132,19 @@ export const createReviewSchema = z.object({
   photos: z.array(z.string()).optional(),
 });
 
+export const updateReviewSchema = z.object({
+  title: z.string().max(100).optional(),
+  content: z.string().min(10, 'المحتوى قصير جداً').max(2000).optional(),
+  rating: z.number().min(1).max(5).optional(),
+  cleanliness: z.number().min(1).max(5).optional(),
+  location: z.number().min(1).max(5).optional(),
+  value: z.number().min(1).max(5).optional(),
+  serviceRating: z.number().min(1).max(5).optional(),
+  amenities: z.number().min(1).max(5).optional(),
+  communication: z.number().min(1).max(5).optional(),
+  visitDate: z.string().optional(),
+});
+
 // ============================================
 // Dispute Validation
 // ============================================

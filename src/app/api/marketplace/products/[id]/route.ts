@@ -1,13 +1,30 @@
+/**
+ * Product API Route - GET/PATCH/DELETE /api/marketplace/products/[id]
+ *
+ * GET: تفاصيل منتج (عام)
+ * PATCH: تحديث منتج (يتطلب ملكية - vendor فقط)
+ * DELETE: حذف منتج (يتطلب ملكية - vendor فقط)
+ *
+ * Security: يستخدم verifyOwnership() من Resource Ownership Layer
+ * لمنع ثغرات IDOR - فقط البائع أو المسؤول يمكنهم التعديل/الحذف
+ */
+
 import { NextRequest, NextResponse } from 'next/server';
 import { getProductRepository } from '@/features/marketplace/infrastructure/repositories';
+import { getAuthUser, AuthError } from '@/lib/auth/middleware';
+import { verifyOwnership } from '@/core/auth/resource-ownership';
+
+interface RouteParams {
+  params: Promise<{ id: string }>;
+}
 
 /**
  * GET /api/marketplace/products/[id]
- * Get a single product by ID
+ * تفاصيل منتج - عام (لا يحتاج مصادقة)
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: RouteParams
 ) {
   try {
     const { id } = await params;
@@ -17,7 +34,7 @@ export async function GET(
 
     if (!product) {
       return NextResponse.json(
-        { error: 'Product not found' },
+        { error: 'المنتج غير موجود' },
         { status: 404 }
       );
     }
@@ -26,7 +43,7 @@ export async function GET(
   } catch (error) {
     console.error('Error fetching product:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch product' },
+      { error: 'فشل في جلب المنتج' },
       { status: 500 }
     );
   }
@@ -34,22 +51,51 @@ export async function GET(
 
 /**
  * PATCH /api/marketplace/products/[id]
- * Update a product
+ * تحديث منتج - يتطلب ملكية (vendor) أو Admin
  */
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: RouteParams
 ) {
   try {
+    // التحقق من المصادقة
+    const user = await getAuthUser(request);
+
+    if (!user) {
+      return NextResponse.json(
+        { error: 'غير مصادق - يرجى تسجيل الدخول' },
+        { status: 401 }
+      );
+    }
+
     const { id } = await params;
+
+    // ✅ ROOT: استخدام verifyOwnership من Resource Ownership Layer
+    const ownershipResult = await verifyOwnership('products', id, user.id, user.role);
+
+    if (!ownershipResult.isOwner) {
+      return NextResponse.json(
+        { error: ownershipResult.reason || 'غير مصرح لك بتعديل هذا المنتج' },
+        { status: 403 }
+      );
+    }
+
     const body = await request.json();
+
+    // حماية الحقول المحظورة
+    const forbiddenFields = ['vendorId', 'id'];
+    for (const field of forbiddenFields) {
+      if (field in body) {
+        delete body[field];
+      }
+    }
 
     const productRepository = getProductRepository();
     const product = await productRepository.update(id, body);
 
     if (!product) {
       return NextResponse.json(
-        { error: 'Product not found' },
+        { error: 'المنتج غير موجود' },
         { status: 404 }
       );
     }
@@ -60,8 +106,13 @@ export async function PATCH(
     return NextResponse.json({ product: productWithVendor || product });
   } catch (error) {
     console.error('Error updating product:', error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode });
+    }
+
     return NextResponse.json(
-      { error: 'Failed to update product' },
+      { error: 'فشل في تحديث المنتج' },
       { status: 500 }
     );
   }
@@ -69,21 +120,41 @@ export async function PATCH(
 
 /**
  * DELETE /api/marketplace/products/[id]
- * Delete a product
+ * حذف منتج - يتطلب ملكية (vendor) أو Admin
  */
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: RouteParams
 ) {
   try {
+    // التحقق من المصادقة
+    const user = await getAuthUser(request);
+
+    if (!user) {
+      return NextResponse.json(
+        { error: 'غير مصادق - يرجى تسجيل الدخول' },
+        { status: 401 }
+      );
+    }
+
     const { id } = await params;
+
+    // ✅ ROOT: استخدام verifyOwnership من Resource Ownership Layer
+    const ownershipResult = await verifyOwnership('products', id, user.id, user.role);
+
+    if (!ownershipResult.isOwner) {
+      return NextResponse.json(
+        { error: ownershipResult.reason || 'غير مصرح لك بحذف هذا المنتج' },
+        { status: 403 }
+      );
+    }
 
     const productRepository = getProductRepository();
     const success = await productRepository.delete(id);
 
     if (!success) {
       return NextResponse.json(
-        { error: 'Product not found' },
+        { error: 'المنتج غير موجود' },
         { status: 404 }
       );
     }
@@ -91,8 +162,13 @@ export async function DELETE(
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error deleting product:', error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode });
+    }
+
     return NextResponse.json(
-      { error: 'Failed to delete product' },
+      { error: 'فشل في حذف المنتج' },
       { status: 500 }
     );
   }

@@ -84,6 +84,7 @@ export async function POST(request: NextRequest) {
 
     // إنشاء المراجعة مع استخدام معرف المستخدم من الجلسة
     // ⚠️ SECURITY: authorId يتم أخذه من الجلسة فقط، لا نقبل body.authorId
+    // Note: rating يُحسب تلقائياً من المعايير في createReview
     const review = await createReview({
       type: validatedData.data.type,
       referenceId: validatedData.data.referenceId,
@@ -92,15 +93,17 @@ export async function POST(request: NextRequest) {
       travelPhase: validatedData.data.travelPhase,
       title: validatedData.data.title,
       content: validatedData.data.content,
-      rating: validatedData.data.rating,
       cleanliness: validatedData.data.cleanliness,
       location: validatedData.data.location,
       value: validatedData.data.value,
       serviceRating: validatedData.data.serviceRating,
       amenities: validatedData.data.amenities,
       communication: validatedData.data.communication,
-      visitDate: validatedData.data.visitDate,
-      photos: validatedData.data.photos,
+      visitDate: validatedData.data.visitDate ? new Date(validatedData.data.visitDate) : undefined,
+      photos: validatedData.data.photos?.map((url, index) => ({
+        url,
+        order: index,
+      })),
       authorId: user.id, // ✅ من الجلسة فقط - حماية من IDOR
     });
 

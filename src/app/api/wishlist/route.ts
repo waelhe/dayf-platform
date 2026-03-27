@@ -4,20 +4,41 @@
  */
 
 /**
- * Wishlist API
- * API للمفضلة
+ * Wishlist API - GET/POST/DELETE /api/wishlist
+ *
+ * GET: جلب المفضلة
+ * POST: إضافة للمفضلة
+ * DELETE: حذف من المفضلة
+ *
+ * Security: userId يُؤخذ من الجلسة فقط - حماية من IDOR
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getWishlistRepository } from '@/features/marketplace/infrastructure/repositories';
+import { getAuthUser, AuthError } from '@/lib/auth/middleware';
 
-// GET - جلب المفضلة
+/**
+ * GET /api/wishlist
+ * جلب المفضلة - يتطلب مصادقة
+ *
+ * Security: userId من الجلسة فقط
+ */
 export async function GET(request: NextRequest) {
   try {
-    const userId = request.headers.get('x-user-id') || 'demo-user';
+    // ✅ SECURITY: التحقق من المصادقة
+    const user = await getAuthUser(request);
+
+    if (!user) {
+      return NextResponse.json(
+        { success: false, error: 'غير مصادق - يرجى تسجيل الدخول' },
+        { status: 401 }
+      );
+    }
 
     const wishlistRepository = getWishlistRepository();
-    const wishlistItems = await wishlistRepository.findByUserId(userId);
+
+    // ✅ SECURITY: استخدام user.id من الجلسة فقط
+    const wishlistItems = await wishlistRepository.findByUserId(user.id);
 
     // Transform to match the expected output format
     const transformedItems = wishlistItems.map(item => ({
@@ -39,6 +60,11 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     console.error('Error fetching wishlist:', error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json({ success: false, error: error.message }, { status: error.statusCode });
+    }
+
     return NextResponse.json(
       { success: false, error: 'حدث خطأ في جلب المفضلة' },
       { status: 500 }
@@ -46,10 +72,24 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST - إضافة للمفضلة
+/**
+ * POST /api/wishlist
+ * إضافة للمفضلة - يتطلب مصادقة
+ *
+ * Security: userId من الجلسة فقط
+ */
 export async function POST(request: NextRequest) {
   try {
-    const userId = request.headers.get('x-user-id') || 'demo-user';
+    // ✅ SECURITY: التحقق من المصادقة
+    const user = await getAuthUser(request);
+
+    if (!user) {
+      return NextResponse.json(
+        { success: false, error: 'غير مصادق - يرجى تسجيل الدخول' },
+        { status: 401 }
+      );
+    }
+
     const body = await request.json();
     const { serviceId, productId } = body;
 
@@ -62,8 +102,9 @@ export async function POST(request: NextRequest) {
 
     const wishlistRepository = getWishlistRepository();
 
+    // ✅ SECURITY: استخدام user.id من الجلسة فقط
     // التحقق من عدم وجود العنصر مسبقاً
-    const exists = await wishlistRepository.existsByUserAndItem(userId, serviceId, productId);
+    const exists = await wishlistRepository.existsByUserAndItem(user.id, serviceId, productId);
 
     if (exists) {
       return NextResponse.json(
@@ -74,7 +115,7 @@ export async function POST(request: NextRequest) {
 
     // إضافة للمفضلة
     await wishlistRepository.create({
-      userId,
+      userId: user.id,
       serviceId: serviceId || null,
       productId: productId || null,
     });
@@ -85,6 +126,11 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error('Error adding to wishlist:', error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json({ success: false, error: error.message }, { status: error.statusCode });
+    }
+
     return NextResponse.json(
       { success: false, error: 'حدث خطأ في الإضافة للمفضلة' },
       { status: 500 }
@@ -92,10 +138,24 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// DELETE - حذف من المفضلة
+/**
+ * DELETE /api/wishlist
+ * حذف من المفضلة - يتطلب مصادقة
+ *
+ * Security: userId من الجلسة فقط + التحقق من الملكية
+ */
 export async function DELETE(request: NextRequest) {
   try {
-    const userId = request.headers.get('x-user-id') || 'demo-user';
+    // ✅ SECURITY: التحقق من المصادقة
+    const user = await getAuthUser(request);
+
+    if (!user) {
+      return NextResponse.json(
+        { success: false, error: 'غير مصادق - يرجى تسجيل الدخول' },
+        { status: 401 }
+      );
+    }
+
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
 
@@ -107,7 +167,9 @@ export async function DELETE(request: NextRequest) {
     }
 
     const wishlistRepository = getWishlistRepository();
-    await wishlistRepository.removeByUserAndId(userId, id);
+
+    // ✅ SECURITY: استخدام user.id من الجلسة فقط + التحقق من الملكية
+    await wishlistRepository.removeByUserAndId(user.id, id);
 
     return NextResponse.json({
       success: true,
@@ -115,6 +177,11 @@ export async function DELETE(request: NextRequest) {
     });
   } catch (error) {
     console.error('Error removing from wishlist:', error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json({ success: false, error: error.message }, { status: error.statusCode });
+    }
+
     return NextResponse.json(
       { success: false, error: 'حدث خطأ في الحذف من المفضلة' },
       { status: 500 }

@@ -1,7 +1,26 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getTopicRepository, getReplyRepository } from '@/features/community/infrastructure/repositories';
-import { getUserRepository } from '@/features/auth/infrastructure/repositories/user.repository';
+/**
+ * Community Topics API Route - GET/POST /api/community/topics
+ *
+ * GET: قائمة المواضيع (عام)
+ * POST: إنشاء موضوع جديد (يتطلب مصادقة)
+ *
+ * Security: authorId يُؤخذ من الجلسة فقط
+ * لمنع تزوير هوية الكاتب
+ */
 
+import { NextRequest, NextResponse } from 'next/server';
+import { getTopicRepository } from '@/features/community/infrastructure/repositories';
+import { getAuthUser, AuthError } from '@/lib/auth/middleware';
+import { Role } from '@/core/types/enums';
+
+interface RouteParams {
+  params: Promise<{ id: string }>;
+}
+
+/**
+ * GET /api/community/topics
+ * قائمة المواضيع - عام
+ */
 export async function GET(request: NextRequest) {
   try {
     const topicRepo = getTopicRepository();
@@ -18,44 +37,54 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error('Error fetching topics:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch topics' },
+      { error: 'فشل في جلب المواضيع' },
       { status: 500 }
     );
   }
 }
 
+/**
+ * POST /api/community/topics
+ * إنشاء موضوع جديد - يتطلب مصادقة
+ * 
+ * Security: authorId من الجلسة فقط
+ */
 export async function POST(request: NextRequest) {
   try {
-    const topicRepo = getTopicRepository();
-    const userRepo = getUserRepository();
-    
-    const body = await request.json();
-    const { title, content, authorId, categoryId, subCategoryId, isOfficial } = body;
+    // التحقق من المصادقة
+    const user = await getAuthUser(request);
 
-    if (!title || !content || !authorId || !categoryId) {
+    if (!user) {
+      return NextResponse.json(
+        { error: 'غير مصادق - يرجى تسجيل الدخول' },
+        { status: 401 }
+      );
+    }
+
+    const topicRepo = getTopicRepository();
+    const body = await request.json();
+    const { title, content, categoryId, subCategoryId, isOfficial } = body;
+
+    // التحقق من البيانات المطلوبة
+    if (!title || !content || !categoryId) {
       return NextResponse.json(
         { error: 'العنوان والمحتوى والتصنيف مطلوبة' },
         { status: 400 }
       );
     }
 
-    // Check if user exists
-    const user = await userRepo.findById(authorId);
+    // التحقق من صلاحية isOfficial (فقط Admin يمكنه تعيينها)
+    const isAdmin = user.role === Role.ADMIN || user.role === Role.SUPER_ADMIN;
+    const finalIsOfficial = isAdmin && isOfficial ? true : false;
 
-    if (!user) {
-      return NextResponse.json(
-        { error: 'المستخدم غير موجود' },
-        { status: 404 }
-      );
-    }
-
+    // ✅ SECURITY: authorId من الجلسة فقط
     const topic = await topicRepo.create({
       title,
       content,
-      authorId,
+      authorId: user.id,
       categoryId,
       subCategoryId: subCategoryId || null,
-      isOfficial: isOfficial || false,
+      isOfficial: finalIsOfficial,
       likesCount: 0,
       repliesCount: 0,
     });
@@ -63,13 +92,18 @@ export async function POST(request: NextRequest) {
     // Get topic with author info
     const topicWithAuthor = await topicRepo.findByIdWithAuthor(topic.id);
 
-    return NextResponse.json({ 
+    return NextResponse.json({
       id: topic.id,
       topic: topicWithAuthor,
       message: 'تم إنشاء الموضوع بنجاح'
     }, { status: 201 });
   } catch (error) {
     console.error('Error creating topic:', error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode });
+    }
+
     return NextResponse.json(
       { error: 'فشل في إنشاء الموضوع' },
       { status: 500 }

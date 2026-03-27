@@ -1,9 +1,20 @@
+/**
+ * Products API Route - GET/POST /api/marketplace/products
+ *
+ * GET: قائمة المنتجات (عام)
+ * POST: إنشاء منتج جديد (يتطلب مصادقة + صلاحية Provider)
+ *
+ * Security: vendorId يُؤخذ من الجلسة فقط - حماية من IDOR
+ */
+
 import { NextRequest, NextResponse } from 'next/server';
 import { getProductRepository } from '@/features/marketplace/infrastructure/repositories';
+import { getAuthUser, AuthError } from '@/lib/auth/middleware';
+import { Role } from '@/core/types/enums';
 
 /**
  * GET /api/marketplace/products
- * Get all products or filter by vendorId
+ * قائمة المنتجات - عام
  */
 export async function GET(request: NextRequest) {
   try {
@@ -34,7 +45,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error('Error fetching products:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch products' },
+      { error: 'فشل في جلب المنتجات' },
       { status: 500 }
     );
   }
@@ -42,22 +53,49 @@ export async function GET(request: NextRequest) {
 
 /**
  * POST /api/marketplace/products
- * Create a new product
+ * إنشاء منتج جديد - يتطلب مصادقة + صلاحية Provider
+ *
+ * Security: vendorId من الجلسة فقط
  */
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { name, description, price, category, location, image, vendorId } = body;
+    // ✅ SECURITY: التحقق من المصادقة
+    const user = await getAuthUser(request);
 
-    if (!name || !description || !price || !category || !location || !image || !vendorId) {
+    if (!user) {
       return NextResponse.json(
-        { error: 'Missing required fields' },
+        { error: 'غير مصادق - يرجى تسجيل الدخول' },
+        { status: 401 }
+      );
+    }
+
+    // ✅ SECURITY: التحقق من صلاحية إنشاء المنتجات
+    const canCreateProduct =
+      user.role === Role.PROVIDER ||
+      user.role === Role.HOST ||
+      user.role === Role.ADMIN ||
+      user.role === Role.SUPER_ADMIN;
+
+    if (!canCreateProduct) {
+      return NextResponse.json(
+        { error: 'غير مصرح لك بإنشاء منتجات - يجب أن تكون مزوداً' },
+        { status: 403 }
+      );
+    }
+
+    const body = await request.json();
+    const { name, description, price, category, location, image } = body;
+
+    if (!name || !description || !price || !category || !location || !image) {
+      return NextResponse.json(
+        { error: 'جميع الحقول مطلوبة: الاسم، الوصف، السعر، التصنيف، الموقع، الصورة' },
         { status: 400 }
       );
     }
 
     const productRepository = getProductRepository();
 
+    // ✅ SECURITY: vendorId من الجلسة فقط - لا نقبل body.vendorId
     const product = await productRepository.create({
       name,
       description,
@@ -65,21 +103,26 @@ export async function POST(request: NextRequest) {
       category,
       location,
       image,
-      vendorId,
+      vendorId: user.id, // ✅ من الجلسة فقط - حماية من IDOR
       rating: 0,
       reviews: 0,
-      vendorName: null,
+      vendorName: user.displayName || null,
       companyId: null,
     });
 
     // Fetch the product with vendor info
     const productWithVendor = await productRepository.findByIdWithVendor(product.id);
 
-    return NextResponse.json({ product: productWithVendor || product });
+    return NextResponse.json({ product: productWithVendor || product }, { status: 201 });
   } catch (error) {
     console.error('Error creating product:', error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode });
+    }
+
     return NextResponse.json(
-      { error: 'Failed to create product' },
+      { error: 'فشل في إنشاء المنتج' },
       { status: 500 }
     );
   }

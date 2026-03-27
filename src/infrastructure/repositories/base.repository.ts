@@ -3,20 +3,95 @@
  * تنفيذ المستودع الأساسي
  * 
  * Abstract base class implementing IRepository with common CRUD operations
+ * يدعم DataLoader لمنع N+1 queries جذرياً
  */
 
 import type { IRepository, IDatabaseProvider, QueryOptions, PaginatedResult, FilterQuery, PaginationOptions, CreateOptions, UpdateOptions, DeleteOptions, CountOptions, BaseEntity } from '@/core/database';
 import { DatabaseError, DatabaseErrorCode } from '@/core/database';
 import { getSupabaseProvider } from '../database/supabase-provider';
+import DataLoader from 'dataloader';
 
 export abstract class BaseRepository<T extends BaseEntity> implements IRepository<T> {
   protected tableName: string;
   protected provider: IDatabaseProvider;
   protected primaryKey: string = 'id';
+  
+  /**
+   * DataLoader لمنع N+1 queries
+   * يتم إنشاؤه عند الحاجة ويُخزن للـ request الواحد
+   */
+  private _loader: DataLoader<string, T | null> | null = null;
 
   constructor(tableName: string, provider?: IDatabaseProvider) {
     this.tableName = tableName;
     this.provider = provider ?? getSupabaseProvider();
+  }
+
+  /**
+   * الحصول على DataLoader لهذا الـ repository
+   * ينشئ loader جديد إذا لم يكن موجوداً
+   */
+  protected getLoader(): DataLoader<string, T | null> {
+    if (!this._loader) {
+      this._loader = new DataLoader<string, T | null>(
+        async (keys: readonly string[]) => {
+          return this._batchLoad([...keys]);
+        },
+        {
+          cache: true,
+          maxBatchSize: 100,
+        }
+      );
+    }
+    return this._loader;
+  }
+
+  /**
+   * تحميل مجموعة من السجلات دفعة واحدة
+   * هذه هي الدالة الأساسية للـ batching
+   */
+  protected async _batchLoad(ids: string[]): Promise<(T | null)[]> {
+    if (ids.length === 0) return [];
+
+    try {
+      const client = this.getClient();
+      const { data, error } = await client
+        .from(this.tableName)
+        .select('*')
+        .in(this.primaryKey, ids);
+
+      if (error) {
+        throw DatabaseError.fromError(error, { table: this.tableName, ids });
+      }
+
+      // إنشاء Map للبحث السريع
+      const resultMap = new Map<string, T>();
+      for (const row of data || []) {
+        const entity = this.toEntity(row);
+        const key = (row as Record<string, unknown>)[this.primaryKey] as string;
+        resultMap.set(key, entity);
+      }
+
+      // إرجاع النتائج بنفس ترتيب الـ ids
+      return ids.map(id => resultMap.get(id) || null);
+    } catch (error) {
+      if (error instanceof DatabaseError) throw error;
+      throw DatabaseError.fromError(error, { table: this.tableName, ids });
+    }
+  }
+
+  /**
+   * مسح الـ cache للـ DataLoader
+   * يجب استدعاؤها بعد كل عملية كتابة
+   */
+  protected clearLoader(id?: string): void {
+    if (this._loader) {
+      if (id) {
+        this._loader.clear(id);
+      } else {
+        this._loader.clearAll();
+      }
+    }
   }
 
   // ============================================
@@ -81,7 +156,27 @@ export abstract class BaseRepository<T extends BaseEntity> implements IRepositor
   // Read Operations
   // ============================================
 
+  /**
+   * البحث عن سجل بالمعرف
+   * يستخدم DataLoader تلقائياً للـ batching
+   */
   async findById(id: string): Promise<T | null> {
+    return this.getLoader().load(id);
+  }
+
+  /**
+   * البحث عن عدة سجلات بمعرفات متعددة
+   * يستخدم batching تلقائياً
+   */
+  async findByIds(ids: string[]): Promise<(T | null)[]> {
+    return this.getLoader().loadMany(ids);
+  }
+
+  /**
+   * البحث عن سجل بالمعرف (بدون DataLoader)
+   * يستخدم للعمليات التي تحتاج استعلام مباشر
+   */
+  async findByIdDirect(id: string): Promise<T | null> {
     try {
       const client = this.getClient();
       const { data, error } = await client
@@ -273,7 +368,12 @@ export abstract class BaseRepository<T extends BaseEntity> implements IRepositor
         throw DatabaseError.fromError(error, { table: this.tableName, data: row });
       }
 
-      return this.toEntity(result);
+      const entity = this.toEntity(result);
+      
+      // تحديث الـ cache
+      this.clearLoader();
+      
+      return entity;
     } catch (error) {
       if (error instanceof DatabaseError) throw error;
       throw DatabaseError.fromError(error, { table: this.tableName, data });
@@ -332,7 +432,12 @@ export abstract class BaseRepository<T extends BaseEntity> implements IRepositor
         throw DatabaseError.fromError(error, { table: this.tableName, id, data: row });
       }
 
-      return result ? this.toEntity(result) : null;
+      const entity = result ? this.toEntity(result) : null;
+      
+      // تحديث الـ cache للـ id المحدد
+      this.clearLoader(id);
+      
+      return entity;
     } catch (error) {
       if (error instanceof DatabaseError) throw error;
       throw DatabaseError.fromError(error, { table: this.tableName, id, data });
@@ -382,6 +487,9 @@ export abstract class BaseRepository<T extends BaseEntity> implements IRepositor
           throw DatabaseError.fromError(error, { table: this.tableName, id, softDelete: true });
         }
 
+        // تحديث الـ cache
+        this.clearLoader(id);
+
         return true;
       }
 
@@ -394,6 +502,9 @@ export abstract class BaseRepository<T extends BaseEntity> implements IRepositor
       if (error) {
         throw DatabaseError.fromError(error, { table: this.tableName, id });
       }
+
+      // تحديث الـ cache
+      this.clearLoader(id);
 
       return true;
     } catch (error) {

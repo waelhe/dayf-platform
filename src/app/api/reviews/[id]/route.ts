@@ -1,18 +1,29 @@
 /**
- * Review API Route - GET/PUT/DELETE /api/reviews/[id]
- * 
- * GET: تفاصيل مراجعة واحدة
- * PUT: تحديث مراجعة
- * DELETE: حذف مراجعة
+ * Review API Route - GET/PATCH/DELETE /api/reviews/[id]
+ *
+ * GET: تفاصيل مراجعة واحدة (عام)
+ * PATCH: تحديث مراجعة (يحتاج ملكية)
+ * DELETE: حذف مراجعة (يحتاج ملكية)
+ *
+ * Security: يستخدم verifyOwnership() من Resource Ownership Layer
+ * لمنع ثغرات IDOR - المستخدم لا يمكنه تعديل مراجعات الآخرين
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getReview, updateReview, deleteReview } from '@/features/reviews/infrastructure/review-service';
+import { getAuthUser, AuthError } from '@/lib/auth/middleware';
+import { verifyOwnership } from '@/core/auth/resource-ownership';
+import { updateReviewSchema, formatZodError } from '@/lib/validation/schemas';
+import { Role } from '@/core/types/enums';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
 }
 
+/**
+ * GET /api/reviews/[id]
+ * تفاصيل مراجعة واحدة - عام (لا يحتاج مصادقة)
+ */
 export async function GET(
   request: NextRequest,
   { params }: RouteParams
@@ -41,32 +52,58 @@ export async function GET(
   }
 }
 
-export async function PUT(
+/**
+ * PATCH /api/reviews/[id]
+ * تحديث مراجعة - يتطلب ملكية
+ * @security authorId يؤخذ من الجلسة فقط
+ */
+export async function PATCH(
   request: NextRequest,
   { params }: RouteParams
 ) {
   try {
+    // التحقق من المصادقة
+    const user = await getAuthUser(request);
+
+    if (!user) {
+      return NextResponse.json(
+        { success: false, error: 'غير مصادق - يرجى تسجيل الدخول' },
+        { status: 401 }
+      );
+    }
+
     const { id } = await params;
+
+    // ✅ ROOT: استخدام verifyOwnership من Resource Ownership Layer
+    const ownershipResult = await verifyOwnership('reviews', id, user.id, user.role);
+
+    if (!ownershipResult.isOwner) {
+      return NextResponse.json(
+        { success: false, error: ownershipResult.reason || 'غير مصرح لك بتعديل هذه المراجعة' },
+        { status: 403 }
+      );
+    }
+
     const body = await request.json();
 
-    if (!body.authorId) {
+    // التحقق من صحة البيانات
+    const validatedData = updateReviewSchema.safeParse(body);
+
+    if (!validatedData.success) {
       return NextResponse.json(
-        { success: false, error: 'مطلوب معرف المستخدم' },
+        { success: false, error: formatZodError(validatedData.error) },
         { status: 400 }
       );
     }
 
-    const review = await updateReview(id, body.authorId, {
-      title: body.title,
-      content: body.content,
-      cleanliness: body.cleanliness,
-      location: body.location,
-      value: body.value,
-      serviceRating: body.serviceRating,
-      amenities: body.amenities,
-      communication: body.communication,
-      visitDate: body.visitDate ? new Date(body.visitDate) : undefined,
-    });
+    // تحويل visitDate من string إلى Date إذا كان موجوداً
+    const updateData = {
+      ...validatedData.data,
+      visitDate: validatedData.data.visitDate ? new Date(validatedData.data.visitDate) : undefined,
+    };
+
+    // ✅ SECURITY: authorId من الجلسة فقط، وليس من body
+    const review = await updateReview(id, user.id, updateData);
 
     return NextResponse.json({
       success: true,
@@ -78,23 +115,23 @@ export async function PUT(
     });
   } catch (error) {
     console.error('Error updating review:', error);
-    
+
     const errorMessage = error instanceof Error ? error.message : 'خطأ في تحديث المراجعة';
-    
+
     if (errorMessage === 'REVIEW_NOT_FOUND') {
       return NextResponse.json(
         { success: false, error: 'المراجعة غير موجودة' },
         { status: 404 }
       );
     }
-    
+
     if (errorMessage === 'NOT_AUTHORIZED') {
       return NextResponse.json(
         { success: false, error: 'غير مصرح لك بتعديل هذه المراجعة' },
         { status: 403 }
       );
     }
-    
+
     if (errorMessage === 'EDIT_PERIOD_EXPIRED') {
       return NextResponse.json(
         { success: false, error: 'انتهت فترة التعديل (30 يوم)' },
@@ -102,6 +139,10 @@ export async function PUT(
       );
     }
 
+    if (error instanceof AuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode });
+    }
+
     return NextResponse.json(
       { success: false, error: errorMessage },
       { status: 500 }
@@ -109,23 +150,40 @@ export async function PUT(
   }
 }
 
+/**
+ * DELETE /api/reviews/[id]
+ * حذف مراجعة - يتطلب ملكية أو صلاحية Admin
+ * @security authorId يؤخذ من الجلسة فقط
+ */
 export async function DELETE(
   request: NextRequest,
   { params }: RouteParams
 ) {
   try {
-    const { id } = await params;
-    const searchParams = request.nextUrl.searchParams;
-    const authorId = searchParams.get('authorId');
+    // التحقق من المصادقة
+    const user = await getAuthUser(request);
 
-    if (!authorId) {
+    if (!user) {
       return NextResponse.json(
-        { success: false, error: 'مطلوب معرف المستخدم' },
-        { status: 400 }
+        { success: false, error: 'غير مصادق - يرجى تسجيل الدخول' },
+        { status: 401 }
       );
     }
 
-    await deleteReview(id, authorId);
+    const { id } = await params;
+
+    // ✅ ROOT: استخدام verifyOwnership من Resource Ownership Layer
+    const ownershipResult = await verifyOwnership('reviews', id, user.id, user.role);
+
+    if (!ownershipResult.isOwner) {
+      return NextResponse.json(
+        { success: false, error: ownershipResult.reason || 'غير مصرح لك بحذف هذه المراجعة' },
+        { status: 403 }
+      );
+    }
+
+    // ✅ SECURITY: authorId من الجلسة فقط
+    await deleteReview(id, user.id);
 
     return NextResponse.json({
       success: true,
@@ -133,21 +191,25 @@ export async function DELETE(
     });
   } catch (error) {
     console.error('Error deleting review:', error);
-    
+
     const errorMessage = error instanceof Error ? error.message : 'خطأ في حذف المراجعة';
-    
+
     if (errorMessage === 'REVIEW_NOT_FOUND') {
       return NextResponse.json(
         { success: false, error: 'المراجعة غير موجودة' },
         { status: 404 }
       );
     }
-    
+
     if (errorMessage === 'NOT_AUTHORIZED') {
       return NextResponse.json(
         { success: false, error: 'غير مصرح لك بحذف هذه المراجعة' },
         { status: 403 }
       );
+    }
+
+    if (error instanceof AuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode });
     }
 
     return NextResponse.json(
@@ -156,3 +218,6 @@ export async function DELETE(
     );
   }
 }
+
+// دعم PUT للتوافق مع الكود القديم
+export const PUT = PATCH;

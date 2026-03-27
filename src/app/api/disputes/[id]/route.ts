@@ -1,35 +1,51 @@
 /**
- * GET /api/disputes/[id] - تفاصيل المنازعة
+ * Dispute API Route - GET /api/disputes/[id]
+ *
+ * GET: تفاصيل المنازعة (يتطلب ملكية أو Admin)
+ *
+ * Security: يستخدم verifyOwnership() من Resource Ownership Layer
+ * لمنع ثغرات IDOR - فقط أطراف النزاع والمسؤولون يمكنهم المشاهدة
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { DisputeService } from '@/features/disputes/infrastructure/dispute-service';
+import { getAuthUser, AuthError } from '@/lib/auth/middleware';
+import { verifyOwnership } from '@/core/auth/resource-ownership';
 
-async function getCurrentUser(request: NextRequest): Promise<{ id: string; role: string } | null> {
-  const sessionToken = request.cookies.get('session_token')?.value;
-  if (!sessionToken) return null;
-  return null;
+interface RouteParams {
+  params: Promise<{ id: string }>;
 }
 
 /**
  * GET /api/disputes/[id]
- * تفاصيل المنازعة
+ * تفاصيل المنازعة - يتطلب ملكية (كأحد الأطراف) أو Admin
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: RouteParams
 ) {
   try {
-    const user = await getCurrentUser(request);
-    
+    // التحقق من المصادقة
+    const user = await getAuthUser(request);
+
     if (!user) {
       return NextResponse.json(
-        { error: 'غير مصرح' },
+        { error: 'غير مصادق - يرجى تسجيل الدخول' },
         { status: 401 }
       );
     }
 
     const { id } = await params;
+
+    // ✅ ROOT: استخدام verifyOwnership من Resource Ownership Layer
+    const ownershipResult = await verifyOwnership('disputes', id, user.id, user.role);
+
+    if (!ownershipResult.isOwner) {
+      return NextResponse.json(
+        { error: ownershipResult.reason || 'غير مصرح بالوصول لهذه المنازعة' },
+        { status: 403 }
+      );
+    }
 
     const dispute = await DisputeService.getDisputeById(id);
 
@@ -40,27 +56,19 @@ export async function GET(
       );
     }
 
-    // التحقق من صلاحية المستخدم
-    const canView = 
-      dispute.openedBy === user.id || 
-      dispute.againstUser === user.id || 
-      user.role === 'ADMIN';
-
-    if (!canView) {
-      return NextResponse.json(
-        { error: 'غير مصرح بالوصول لهذه المنازعة' },
-        { status: 403 }
-      );
-    }
-
     // تصفية الرسائل الداخلية للمستخدمين غير الإداريين
-    if (user.role !== 'ADMIN') {
+    if (user.role !== 'ADMIN' && user.role !== 'SUPER_ADMIN') {
       dispute.messages = dispute.messages.filter(m => !m.isInternal);
     }
 
     return NextResponse.json({ dispute });
   } catch (error) {
     console.error('Error fetching dispute:', error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode });
+    }
+
     return NextResponse.json(
       { error: 'حدث خطأ أثناء جلب تفاصيل المنازعة' },
       { status: 500 }

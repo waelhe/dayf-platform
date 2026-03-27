@@ -1,7 +1,21 @@
+/**
+ * Community Replies API Route - GET/POST /api/community/replies
+ *
+ * GET: قائمة الردود لموضوع (عام)
+ * POST: إضافة رد جديد (يتطلب مصادقة)
+ *
+ * Security: authorId يُؤخذ من الجلسة فقط
+ * لمنع تزوير هوية الكاتب
+ */
+
 import { NextRequest, NextResponse } from 'next/server';
 import { getTopicRepository, getReplyRepository } from '@/features/community/infrastructure/repositories';
+import { getAuthUser, AuthError } from '@/lib/auth/middleware';
 
-// GET /api/community/replies - Get replies for a topic
+/**
+ * GET /api/community/replies
+ * قائمة الردود لموضوع - عام
+ */
 export async function GET(request: NextRequest) {
   try {
     const replyRepo = getReplyRepository();
@@ -10,7 +24,7 @@ export async function GET(request: NextRequest) {
 
     if (!topicId) {
       return NextResponse.json(
-        { error: 'topicId is required' },
+        { error: 'معرف الموضوع مطلوب' },
         { status: 400 }
       );
     }
@@ -24,33 +38,58 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error('Error fetching replies:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch replies' },
+      { error: 'فشل في جلب الردود' },
       { status: 500 }
     );
   }
 }
 
-// POST /api/community/replies - Create reply
+/**
+ * POST /api/community/replies
+ * إضافة رد جديد - يتطلب مصادقة
+ *
+ * Security: authorId من الجلسة فقط
+ */
 export async function POST(request: NextRequest) {
   try {
+    // التحقق من المصادقة
+    const user = await getAuthUser(request);
+
+    if (!user) {
+      return NextResponse.json(
+        { error: 'غير مصادق - يرجى تسجيل الدخول' },
+        { status: 401 }
+      );
+    }
+
     const replyRepo = getReplyRepository();
     const topicRepo = getTopicRepository();
-    
-    const body = await request.json();
-    const { topicId, content, authorId } = body;
 
-    if (!topicId || !content || !authorId) {
+    const body = await request.json();
+    const { topicId, content } = body;
+
+    // التحقق من البيانات المطلوبة
+    if (!topicId || !content) {
       return NextResponse.json(
-        { error: 'topicId, content, and authorId are required' },
+        { error: 'معرف الموضوع والمحتوى مطلوبان' },
         { status: 400 }
       );
     }
 
-    // Create reply
+    // التحقق من وجود الموضوع
+    const topic = await topicRepo.findById(topicId);
+    if (!topic) {
+      return NextResponse.json(
+        { error: 'الموضوع غير موجود' },
+        { status: 404 }
+      );
+    }
+
+    // ✅ SECURITY: authorId من الجلسة فقط
     const reply = await replyRepo.create({
       topicId,
       content,
-      authorId,
+      authorId: user.id,
       likesCount: 0,
     });
 
@@ -64,8 +103,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(replyWithAuthor || reply, { status: 201 });
   } catch (error) {
     console.error('Error creating reply:', error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode });
+    }
+
     return NextResponse.json(
-      { error: 'Failed to create reply' },
+      { error: 'فشل في إضافة الرد' },
       { status: 500 }
     );
   }

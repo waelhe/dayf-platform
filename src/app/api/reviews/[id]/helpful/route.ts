@@ -1,35 +1,47 @@
 /**
  * Review Helpful API Route - POST/DELETE /api/reviews/[id]/helpful
- * 
+ *
  * POST: التصويت "مفيد" على مراجعة
  * DELETE: إلغاء التصويت
+ *
+ * Security: userId يُؤخذ من الجلسة فقط، وليس من body
+ * لمنع تزوير التصويتات
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { markHelpful, removeHelpfulVote } from '@/features/reviews/infrastructure/review-service';
+import { getAuthUser, AuthError } from '@/lib/auth/middleware';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
 }
 
+/**
+ * POST /api/reviews/[id]/helpful
+ * التصويت "مفيد" - userId من الجلسة فقط
+ */
 export async function POST(
   request: NextRequest,
   { params }: RouteParams
 ) {
   try {
-    const { id: reviewId } = await params;
-    const body = await request.json();
+    // التحقق من المصادقة
+    const user = await getAuthUser(request);
 
-    if (!body.userId) {
+    if (!user) {
       return NextResponse.json(
-        { success: false, error: 'مطلوب معرف المستخدم' },
-        { status: 400 }
+        { success: false, error: 'غير مصادق - يرجى تسجيل الدخول' },
+        { status: 401 }
       );
     }
 
+    const { id: reviewId } = await params;
+    const body = await request.json();
+
+    // ✅ SECURITY: userId من الجلسة فقط، وليس من body
     const isHelpful = body.isHelpful !== false; // default to true
 
-    const result = await markHelpful(reviewId, body.userId, isHelpful);
+    const result = await markHelpful(reviewId, user.id, isHelpful);
 
     return NextResponse.json({
       success: true,
@@ -40,21 +52,25 @@ export async function POST(
     });
   } catch (error) {
     console.error('Error marking helpful:', error);
-    
+
     const errorMessage = error instanceof Error ? error.message : 'خطأ في التصويت';
-    
+
     if (errorMessage === 'REVIEW_NOT_FOUND') {
       return NextResponse.json(
         { success: false, error: 'المراجعة غير موجودة' },
         { status: 404 }
       );
     }
-    
+
     if (errorMessage === 'CANNOT_VOTE_OWN_REVIEW') {
       return NextResponse.json(
         { success: false, error: 'لا يمكنك التصويت على مراجعتك' },
         { status: 400 }
       );
+    }
+
+    if (error instanceof AuthError) {
+      return NextResponse.json({ success: false, error: error.message }, { status: error.statusCode });
     }
 
     return NextResponse.json(
@@ -64,23 +80,29 @@ export async function POST(
   }
 }
 
+/**
+ * DELETE /api/reviews/[id]/helpful
+ * إلغاء التصويت - userId من الجلسة فقط
+ */
 export async function DELETE(
   request: NextRequest,
   { params }: RouteParams
 ) {
   try {
-    const { id: reviewId } = await params;
-    const searchParams = request.nextUrl.searchParams;
-    const userId = searchParams.get('userId');
+    // التحقق من المصادقة
+    const user = await getAuthUser(request);
 
-    if (!userId) {
+    if (!user) {
       return NextResponse.json(
-        { success: false, error: 'مطلوب معرف المستخدم' },
-        { status: 400 }
+        { success: false, error: 'غير مصادق - يرجى تسجيل الدخول' },
+        { status: 401 }
       );
     }
 
-    const result = await removeHelpfulVote(reviewId, userId);
+    const { id: reviewId } = await params;
+
+    // ✅ SECURITY: userId من الجلسة فقط
+    const result = await removeHelpfulVote(reviewId, user.id);
 
     return NextResponse.json({
       success: true,
@@ -91,6 +113,11 @@ export async function DELETE(
     });
   } catch (error) {
     console.error('Error removing helpful vote:', error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json({ success: false, error: error.message }, { status: error.statusCode });
+    }
+
     return NextResponse.json(
       { success: false, error: 'خطأ في إلغاء التصويت' },
       { status: 500 }

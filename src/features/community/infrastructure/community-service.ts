@@ -29,9 +29,9 @@ export const communityService = {
     try {
       const client = getSupabaseProvider().getRawClient();
 
-      // Get user info
+      // Get user info from profiles table
       const { data: user, error: userError } = await client
-        .from('users')
+        .from('profiles')
         .select('id, display_name, avatar, loyalty_points, created_at')
         .eq('id', userId)
         .single();
@@ -188,10 +188,9 @@ export const communityService = {
       // Increment topic likes
       await topicRepo.incrementLikes(topicId);
 
-      // Increment author loyalty points
+      // Increment author loyalty points (profiles table)
       await client
-        .from('users')
-        .update({ loyalty_points: client.rpc('increment', { x: 5 }) })
+        .from('profiles')
         .eq('id', authorId);
     } catch (error) {
       if (error instanceof DatabaseError) throw error;
@@ -211,9 +210,9 @@ export const communityService = {
       // Increment reply likes
       await replyRepo.incrementLikes(replyId);
 
-      // Increment author loyalty points
+      // Increment author loyalty points (profiles table)
       await client
-        .from('users')
+        .from('profiles')
         .update({ loyalty_points: client.rpc('increment', { x: 2 }) })
         .eq('id', authorId);
     } catch (error) {
@@ -243,9 +242,9 @@ export const communityService = {
     try {
       const client = getSupabaseProvider().getRawClient();
 
-      // Get users with topics or replies, ordered by loyalty points
+      // Get profiles with topics or replies, ordered by loyalty points
       const { data: users, error } = await client
-        .from('users')
+        .from('profiles')
         .select('id, display_name, avatar, loyalty_points, created_at')
         .order('loyalty_points', { ascending: false })
         .limit(limit);

@@ -1,8 +1,22 @@
+/**
+ * Services API Route - GET/POST /api/services
+ *
+ * GET: قائمة الخدمات (عام)
+ * POST: إنشاء خدمة جديدة (يتطلب مصادقة + صلاحية Host)
+ *
+ * Security: hostId يُؤخذ من الجلسة فقط
+ * لمنع تزوير ملكية الخدمة
+ */
+
 import { NextRequest, NextResponse } from 'next/server';
 import { servicesService } from '@/features/services/infrastructure/services-service';
+import { getAuthUser, AuthError } from '@/lib/auth/middleware';
+import { Role } from '@/core/types/enums';
 
-// Services API - Updated with new fields support
-// GET /api/services - Get all services or by category
+/**
+ * GET /api/services
+ * قائمة الخدمات - عام
+ */
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -33,28 +47,59 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error('Error fetching services:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch services' },
+      { error: 'فشل في جلب الخدمات' },
       { status: 500 }
     );
   }
 }
 
-// POST /api/services - Create new service
+/**
+ * POST /api/services
+ * إنشاء خدمة جديدة - يتطلب مصادقة
+ *
+ * Security: hostId من الجلسة فقط
+ * فقط Host أو Admin يمكنه إنشاء خدمات
+ */
 export async function POST(request: NextRequest) {
   try {
+    // التحقق من المصادقة
+    const user = await getAuthUser(request);
+
+    if (!user) {
+      return NextResponse.json(
+        { error: 'غير مصادق - يرجى تسجيل الدخول' },
+        { status: 401 }
+      );
+    }
+
+    // التحقق من صلاحية إنشاء الخدمات
+    const canCreateService = 
+      user.role === Role.HOST ||
+      user.role === Role.PROVIDER ||
+      user.role === Role.ADMIN ||
+      user.role === Role.SUPER_ADMIN;
+
+    if (!canCreateService) {
+      return NextResponse.json(
+        { error: 'غير مصرح لك بإنشاء خدمات - يجب أن تكون مضيفاً' },
+        { status: 403 }
+      );
+    }
+
     const body = await request.json();
-    
+
     // Validate required fields
-    const requiredFields = ['title', 'location', 'price', 'images', 'type', 'mainCategoryId', 'hostId'];
+    const requiredFields = ['title', 'location', 'price', 'images', 'type', 'mainCategoryId'];
     for (const field of requiredFields) {
       if (!body[field]) {
         return NextResponse.json(
-          { error: `Missing required field: ${field}` },
+          { error: `الحقل مطلوب: ${field}` },
           { status: 400 }
         );
       }
     }
 
+    // ✅ SECURITY: hostId من الجلسة فقط
     const service = await servicesService.create({
       title: body.title,
       description: body.description || '',
@@ -69,7 +114,7 @@ export async function POST(request: NextRequest) {
       features: body.features || [],
       mainCategoryId: body.mainCategoryId,
       subCategoryId: body.subCategoryId,
-      hostId: body.hostId,
+      hostId: user.id, // ✅ من الجلسة فقط
       maxGuests: body.maxGuests || 4,
       bedrooms: body.bedrooms || 1,
       beds: body.beds || 1,
@@ -81,8 +126,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(service, { status: 201 });
   } catch (error) {
     console.error('Error creating service:', error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode });
+    }
+
     return NextResponse.json(
-      { error: 'Failed to create service' },
+      { error: 'فشل في إنشاء الخدمة' },
       { status: 500 }
     );
   }

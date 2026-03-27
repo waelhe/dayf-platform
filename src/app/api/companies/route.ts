@@ -1,10 +1,16 @@
-// API Route: /api/companies
-// GET - List companies
-// POST - Create new company
+/**
+ * Companies API Route - GET/POST /api/companies
+ *
+ * GET: قائمة الشركات (عام)
+ * POST: إنشاء شركة جديدة (يتطلب مصادقة)
+ *
+ * Security: ownerId يُؤخذ من الجلسة فقط
+ */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { CompanyService } from '@/features/companies';
 import type { CompanyType, CompanyStatus } from '@/features/companies/types';
+import { getAuthUser, AuthError } from '@/lib/auth/middleware';
 
 // Helper to validate and convert company type from string
 function toCompanyType(value: string | null): CompanyType | undefined {
@@ -48,15 +54,26 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST /api/companies - Create company
+/**
+ * POST /api/companies
+ * إنشاء شركة جديدة - يتطلب مصادقة
+ *
+ * Security: ownerId من الجلسة فقط
+ */
 export async function POST(request: NextRequest) {
   try {
+    // ✅ SECURITY: التحقق من المصادقة
+    const user = await getAuthUser(request);
+
+    if (!user) {
+      return NextResponse.json(
+        { error: 'غير مصادق - يرجى تسجيل الدخول' },
+        { status: 401 }
+      );
+    }
+
     const body = await request.json();
-    
-    // TODO: Get userId from session/token
-    // For now, using demo user
-    const userId = 'demo-user';
-    
+
     // Validate required fields
     if (!body.name || !body.type) {
       return NextResponse.json(
@@ -64,7 +81,7 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    
+
     // Validate company type
     const companyType = toCompanyType(body.type);
     if (!companyType) {
@@ -73,9 +90,9 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    
-    // Create company
-    const company = await CompanyService.createCompany(userId, {
+
+    // ✅ SECURITY: ownerId من الجلسة فقط
+    const company = await CompanyService.createCompany(user.id, {
       name: body.name,
       type: companyType,
       description: body.description,
@@ -89,10 +106,15 @@ export async function POST(request: NextRequest) {
       taxNumber: body.taxNumber,
       documents: body.documents,
     });
-    
+
     return NextResponse.json(company, { status: 201 });
   } catch (error) {
     console.error('Error creating company:', error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode });
+    }
+
     return NextResponse.json(
       { error: 'حدث خطأ أثناء إنشاء الشركة' },
       { status: 500 }

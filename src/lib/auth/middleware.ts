@@ -36,10 +36,36 @@ export interface AuthResult {
 /**
  * Get current authenticated user from request
  * الحصول على المستخدم المصادق من الطلب
+ *
+ * يدعم طريقتين:
+ * 1. من headers (الأسرع - من middleware الجذري) - TRUST HEADERS
+ * 2. من token مباشرة (للتوافق مع الكود القديم)
+ *
+ * ROOT SOLUTION: لا نستعلم عن المستخدم إذا كان middleware قد تحقق منه
  */
 export async function getAuthUser(request: NextRequest): Promise<AuthUser | null> {
   try {
-    // Get token from cookie or Authorization header
+    // الطريقة 1: القراءة من headers (الأسرع - من middleware الجذري)
+    // ROOT: Trust the middleware - لا نحتاج للاستعلام عن المستخدم
+    const headerUserId = request.headers.get('x-user-id');
+    const headerUserEmail = request.headers.get('x-user-email');
+    const headerUserRole = request.headers.get('x-user-role');
+
+    if (headerUserId && headerUserRole) {
+      // المستخدم مصادق بالفعل بواسطة middleware - نثق بالـ headers
+      // لا نستعلم عن المستخدم - هذا هو الحل الجذري
+      return {
+        id: headerUserId,
+        email: headerUserEmail || null,
+        phone: null, // غير متوفر في headers - يمكن جلبه لاحقاً إذا احتجنا
+        displayName: headerUserEmail?.split('@')[0] || 'مستخدم', // fallback
+        role: headerUserRole as Role,
+        status: 'ACTIVE', // افتراضي - المستخدم المصادق نشط
+      };
+    }
+
+    // الطريقة 2: القراءة من token مباشرة (للتوافق مع الكود القديم)
+    // هذا يُستخدم فقط إذا middleware لم يعمل (testing, direct calls)
     const token = request.cookies.get('auth_token')?.value ||
                   request.headers.get('Authorization')?.replace('Bearer ', '');
 
@@ -74,6 +100,32 @@ export async function getAuthUser(request: NextRequest): Promise<AuthUser | null
     console.error('Auth middleware error:', error);
     return null;
   }
+}
+
+/**
+ * Get full user profile from database (when needed)
+ * الحصول على ملف المستخدم الكامل (عند الحاجة)
+ *
+ * استخدم هذه الدالة فقط إذا احتجت phone, displayName, status الحقيقية
+ */
+export async function getFullAuthUser(request: NextRequest): Promise<AuthUser | null> {
+  const basicUser = await getAuthUser(request);
+  if (!basicUser) return null;
+
+  // فقط استعلم إذا احتجنا بيانات إضافية
+  const userRepo = getUserRepository();
+  const user = await userRepo.findById(basicUser.id);
+
+  if (!user) return null;
+
+  return {
+    id: user.id,
+    email: user.email,
+    phone: user.phone,
+    displayName: user.displayName,
+    role: user.role as Role,
+    status: user.status,
+  };
 }
 
 /**

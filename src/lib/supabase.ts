@@ -26,7 +26,7 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || supabaseAnon
  */
 export const TABLES = {
   // Auth & Users
-  USERS: 'users',
+  USERS: 'profiles', // ✅ Supabase uses 'profiles' not 'users'
   SESSIONS: 'sessions',
   OTP_CODES: 'otp_codes',
   OAUTH_ACCOUNTS: 'oauth_accounts',
@@ -49,7 +49,7 @@ export const TABLES = {
   
   // Marketplace
   PRODUCTS: 'products',
-  CARTS: 'carts',
+  CARTS: 'cart', // ✅ Supabase uses 'cart' not 'carts'
   CART_ITEMS: 'cart_items',
   
   // Community
@@ -81,7 +81,7 @@ export const TABLES = {
   REVIEWER_PROFILES: 'reviewer_profiles',
   
   // Wishlist
-  WISHLIST_ITEMS: 'wishlist_items',
+  WISHLIST_ITEMS: 'wishlist', // ✅ Supabase uses 'wishlist' not 'wishlist_items'
 } as const;
 
 // ============================================
@@ -128,7 +128,7 @@ export async function checkConnection(): Promise<{ healthy: boolean; latency?: n
     
     // Simple query to check connection
     const { error } = await supabaseAdmin
-      .from('users')
+      .from('profiles')
       .select('id')
       .limit(1);
     

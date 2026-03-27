@@ -1,30 +1,46 @@
+/**
+ * Cart API Route - GET/POST/DELETE /api/cart
+ *
+ * GET: جلب سلة المستخدم
+ * POST: إضافة عنصر للسلة
+ * DELETE: تفريغ السلة
+ *
+ * Security: userId يُؤخذ من الجلسة فقط - حماية من IDOR
+ */
+
 import { NextRequest, NextResponse } from 'next/server';
 import {
   getCartRepository,
   getCartItemRepository,
 } from '@/features/marketplace/infrastructure/repositories';
+import { getAuthUser, AuthError } from '@/lib/auth/middleware';
 
-// GET /api/cart - Get user's cart
+/**
+ * GET /api/cart
+ * جلب سلة المستخدم - يتطلب مصادقة
+ *
+ * Security: userId من الجلسة فقط
+ */
 export async function GET(request: NextRequest) {
   try {
-    const { searchParams } = new URL(request.url);
-    const userId = searchParams.get('userId');
+    // ✅ SECURITY: التحقق من المصادقة
+    const user = await getAuthUser(request);
 
-    if (!userId) {
+    if (!user) {
       return NextResponse.json(
-        { error: 'userId is required' },
-        { status: 400 }
+        { error: 'غير مصادق - يرجى تسجيل الدخول' },
+        { status: 401 }
       );
     }
 
     const cartRepository = getCartRepository();
 
-    // Get or create cart with items
-    const cart = await cartRepository.findWithItemsByUserId(userId);
+    // ✅ SECURITY: استخدام user.id من الجلسة فقط
+    const cart = await cartRepository.findWithItemsByUserId(user.id);
 
     if (!cart) {
       // Create a new cart for the user
-      const newCart = await cartRepository.create({ userId });
+      const newCart = await cartRepository.create({ userId: user.id });
       return NextResponse.json({
         ...newCart,
         items: [],
@@ -36,22 +52,42 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(cart);
   } catch (error) {
     console.error('Error fetching cart:', error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode });
+    }
+
     return NextResponse.json(
-      { error: 'Failed to fetch cart' },
+      { error: 'فشل في جلب السلة' },
       { status: 500 }
     );
   }
 }
 
-// POST /api/cart - Add item to cart
+/**
+ * POST /api/cart
+ * إضافة عنصر للسلة - يتطلب مصادقة
+ *
+ * Security: userId من الجلسة فقط
+ */
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { userId, productId, quantity = 1 } = body;
+    // ✅ SECURITY: التحقق من المصادقة
+    const user = await getAuthUser(request);
 
-    if (!userId || !productId) {
+    if (!user) {
       return NextResponse.json(
-        { error: 'userId and productId are required' },
+        { error: 'غير مصادق - يرجى تسجيل الدخول' },
+        { status: 401 }
+      );
+    }
+
+    const body = await request.json();
+    const { productId, quantity = 1 } = body;
+
+    if (!productId) {
+      return NextResponse.json(
+        { error: 'معرف المنتج مطلوب' },
         { status: 400 }
       );
     }
@@ -59,8 +95,8 @@ export async function POST(request: NextRequest) {
     const cartRepository = getCartRepository();
     const cartItemRepository = getCartItemRepository();
 
-    // Get or create cart
-    const cart = await cartRepository.getOrCreateForUser(userId);
+    // ✅ SECURITY: استخدام user.id من الجلسة فقط
+    const cart = await cartRepository.getOrCreateForUser(user.id);
 
     // Check if item already exists
     const existingItem = await cartItemRepository.findByCartAndProduct(cart.id, productId);
@@ -88,28 +124,40 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(newItem || cartItem, { status: 201 });
   } catch (error) {
     console.error('Error adding to cart:', error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode });
+    }
+
     return NextResponse.json(
-      { error: 'Failed to add to cart' },
+      { error: 'فشل في إضافة العنصر للسلة' },
       { status: 500 }
     );
   }
 }
 
-// DELETE /api/cart - Clear cart
+/**
+ * DELETE /api/cart
+ * تفريغ السلة - يتطلب مصادقة
+ *
+ * Security: userId من الجلسة فقط
+ */
 export async function DELETE(request: NextRequest) {
   try {
-    const { searchParams } = new URL(request.url);
-    const userId = searchParams.get('userId');
+    // ✅ SECURITY: التحقق من المصادقة
+    const user = await getAuthUser(request);
 
-    if (!userId) {
+    if (!user) {
       return NextResponse.json(
-        { error: 'userId is required' },
-        { status: 400 }
+        { error: 'غير مصادق - يرجى تسجيل الدخول' },
+        { status: 401 }
       );
     }
 
     const cartRepository = getCartRepository();
-    const cart = await cartRepository.findByUserId(userId);
+
+    // ✅ SECURITY: استخدام user.id من الجلسة فقط
+    const cart = await cartRepository.findByUserId(user.id);
 
     if (cart) {
       await cartRepository.clearCart(cart.id);
@@ -118,8 +166,13 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error clearing cart:', error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode });
+    }
+
     return NextResponse.json(
-      { error: 'Failed to clear cart' },
+      { error: 'فشل في تفريغ السلة' },
       { status: 500 }
     );
   }

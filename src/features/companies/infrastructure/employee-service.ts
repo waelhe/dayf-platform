@@ -7,7 +7,7 @@ import {
   EmployeeRole, 
   CompanyStatus,
   InvitationStatus,
-} from '../../domain/interfaces';
+} from '../domain/interfaces';
 import type { 
   InviteEmployeeInput, 
   AcceptInvitationInput,

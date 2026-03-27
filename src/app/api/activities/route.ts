@@ -1,16 +1,25 @@
-// API Route: /api/activities
-// GET - List activities
-// POST - Create activity
+/**
+ * Activities API Route - GET/POST /api/activities
+ *
+ * GET: قائمة الأنشطة (عام)
+ * POST: إنشاء نشاط جديد (يتطلب صلاحية Host أو Admin)
+ *
+ * Security: ownerId يُؤخذ من الجلسة فقط
+ */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { ActivityService } from '@/features/tourism';
-import { ActivityType, CompanyStatus } from '@/core/types/enums';
+import { ActivityType, CompanyStatus, Role } from '@/core/types/enums';
+import { getAuthUser, AuthError } from '@/lib/auth/middleware';
 
-// GET /api/activities - List activities
+/**
+ * GET /api/activities
+ * قائمة الأنشطة - عام
+ */
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
-    
+
     const filters = {
       type: searchParams.get('type') as ActivityType | undefined,
       destinationId: searchParams.get('destinationId') || undefined,
@@ -22,9 +31,9 @@ export async function GET(request: NextRequest) {
       page: searchParams.get('page') ? parseInt(searchParams.get('page')!) : 1,
       limit: searchParams.get('limit') ? parseInt(searchParams.get('limit')!) : 20,
     };
-    
+
     const result = await ActivityService.listActivities(filters);
-    
+
     return NextResponse.json(result);
   } catch (error) {
     console.error('Error listing activities:', error);
@@ -35,11 +44,40 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST /api/activities - Create activity
+/**
+ * POST /api/activities
+ * إنشاء نشاط جديد - يتطلب مصادقة وصلاحية
+ *
+ * Security: ownerId من الجلسة فقط
+ */
 export async function POST(request: NextRequest) {
   try {
+    // التحقق من المصادقة
+    const user = await getAuthUser(request);
+
+    if (!user) {
+      return NextResponse.json(
+        { error: 'غير مصادق - يرجى تسجيل الدخول' },
+        { status: 401 }
+      );
+    }
+
+    // التحقق من صلاحية إنشاء الأنشطة
+    const canCreateActivity =
+      user.role === Role.HOST ||
+      user.role === Role.PROVIDER ||
+      user.role === Role.ADMIN ||
+      user.role === Role.SUPER_ADMIN;
+
+    if (!canCreateActivity) {
+      return NextResponse.json(
+        { error: 'غير مصرح لك بإنشاء أنشطة - يجب أن تكون مضيفاً' },
+        { status: 403 }
+      );
+    }
+
     const body = await request.json();
-    
+
     // Validate required fields
     if (!body.title || !body.type || !body.description || !body.location || !body.price) {
       return NextResponse.json(
@@ -47,7 +85,7 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    
+
     // Validate duration
     if (!body.duration || body.duration < 15) {
       return NextResponse.json(
@@ -55,7 +93,7 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    
+
     // Validate images
     if (!body.images || !Array.isArray(body.images) || body.images.length === 0) {
       return NextResponse.json(
@@ -63,11 +101,8 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    
-    // TODO: Get current user from session
-    const currentUserId = 'demo-user';
-    
-    // Create activity
+
+    // ✅ SECURITY: ownerId من الجلسة فقط
     const activity = await ActivityService.createActivity({
       title: body.title,
       type: body.type as ActivityType,
@@ -95,13 +130,18 @@ export async function POST(request: NextRequest) {
       requirements: body.requirements,
       availability: body.availability,
       cancellationPolicy: body.cancellationPolicy,
-      ownerId: currentUserId,
+      ownerId: user.id, // ✅ من الجلسة فقط
       companyId: body.companyId,
     });
-    
+
     return NextResponse.json(activity, { status: 201 });
   } catch (error) {
     console.error('Error creating activity:', error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode });
+    }
+
     return NextResponse.json(
       { error: 'حدث خطأ أثناء إنشاء النشاط' },
       { status: 500 }

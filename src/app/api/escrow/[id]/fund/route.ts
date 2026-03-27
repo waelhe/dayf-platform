@@ -1,28 +1,36 @@
 /**
  * POST /api/escrow/[id]/fund - تمويل الضمان
+ *
+ * Security: يستخدم verifyOwnership() + قاعدة عمل إضافية
+ * - يجب أن يكون المستخدم طرفاً في الضمان (verifyOwnership)
+ * - يجب أن يكون المشتري فقط (business rule)
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { EscrowService } from '@/features/escrow/infrastructure/escrow-service';
 import { getAuthUser, AuthError } from '@/lib/auth/middleware';
+import { verifyOwnership } from '@/core/auth/resource-ownership';
 import { fundEscrowSchema, formatZodError } from '@/lib/validation/schemas';
+
+interface RouteParams {
+  params: Promise<{ id: string }>;
+}
 
 /**
  * POST /api/escrow/[id]/fund
  * تمويل الضمان (للمشتري فقط)
- * يتطلب مصادقة
  */
 export async function POST(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: RouteParams
 ) {
   try {
     // التحقق من المصادقة
     const user = await getAuthUser(request);
-    
+
     if (!user) {
       return NextResponse.json(
-        { error: 'غير مصرح - يرجى تسجيل الدخول' },
+        { error: 'غير مصادق - يرجى تسجيل الدخول' },
         { status: 401 }
       );
     }
@@ -39,7 +47,17 @@ export async function POST(
       );
     }
 
-    // الحصول على الضمان للتحقق من الملكية
+    // ✅ ROOT: استخدام verifyOwnership للتحقق من أن المستخدم طرف في الضمان
+    const ownershipResult = await verifyOwnership('escrows', id, user.id, user.role);
+
+    if (!ownershipResult.isOwner) {
+      return NextResponse.json(
+        { error: ownershipResult.reason || 'غير مصرح بالوصول لهذا الضمان' },
+        { status: 403 }
+      );
+    }
+
+    // الحصول على الضمان للتحقق من قاعدة العمل
     const escrow = await EscrowService.getEscrowById(id);
 
     if (!escrow) {
@@ -49,7 +67,7 @@ export async function POST(
       );
     }
 
-    // فقط المشتري يمكنه تمويل الضمان
+    // قاعدة عمل: فقط المشتري يمكنه تمويل الضمان (وليس المزود)
     if (escrow.buyerId !== user.id) {
       return NextResponse.json(
         { error: 'غير مصرح - فقط المشتري يمكنه تمويل الضمان' },
@@ -63,19 +81,19 @@ export async function POST(
       paymentMetadata: validatedData.data.paymentMetadata,
     });
 
-    return NextResponse.json({ 
+    return NextResponse.json({
       escrow: fundedEscrow,
-      message: 'تم تمويل الضمان بنجاح' 
+      message: 'تم تمويل الضمان بنجاح'
     });
   } catch (error) {
     console.error('Error funding escrow:', error);
-    
+
     if (error instanceof AuthError) {
       return NextResponse.json({ error: error.message }, { status: error.statusCode });
     }
-    
+
     const errorMessage = error instanceof Error ? error.message : 'حدث خطأ أثناء تمويل الضمان';
-    
+
     return NextResponse.json(
       { error: errorMessage },
       { status: 400 }

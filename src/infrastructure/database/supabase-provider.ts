@@ -27,7 +27,7 @@ interface TransactionOperation {
   type: 'insert' | 'update' | 'delete';
   table: string;
   data?: Record<string, unknown>;
-  filters?: Record<string, unknown>;
+  filters?: { id?: string; [key: string]: unknown };
   result?: { id?: string; affectedRows: number };
   compensatingAction?: () => Promise<void>;
 }
@@ -337,30 +337,86 @@ export class SupabaseProvider implements IDatabaseProvider {
 
   /**
    * Create a compensating action for rollback
-   * إنشاء إجراء تعويضي للتراجع
+   * إنشاء إجراء تعويضي للتراجع الفعلي
    */
-  private async createCompensatingAction(op: Omit<TransactionOperation, 'result' | 'compensatingAction'>): Promise<() => Promise<void>> {
+  private async createCompensatingAction(
+    op: Omit<TransactionOperation, 'result' | 'compensatingAction'>
+  ): Promise<() => Promise<void>> {
     switch (op.type) {
       case 'insert': {
-        // Compensating: delete the inserted record
+        // Compensating: delete the inserted record after it's created
+        // We store the operation to get the result ID after execution
         return async () => {
-          // We'll need the ID after insert, so this is a placeholder
-          // Real implementation would track the inserted ID
-          console.log(`Compensating insert on ${op.table}`);
+          // The result is set after executeOperation, so we use op.result
+          if (op.result?.id) {
+            const { error } = await this.client
+              .from(op.table)
+              .delete()
+              .eq('id', op.result.id);
+            
+            if (error) {
+              console.error(`[Rollback] Failed to delete ${op.table}.${op.result.id}:`, error);
+              throw error;
+            }
+            console.log(`[Rollback] Deleted ${op.table}.${op.result.id}`);
+          }
         };
       }
       case 'update': {
         // Compensating: restore original values
-        // We'd need to fetch original values before update
+        // We need to fetch original data before update
+        let originalData: Record<string, unknown> | null = null;
+        
+        if (op.filters?.id) {
+          const { data } = await this.client
+            .from(op.table)
+            .select('*')
+            .eq('id', op.filters.id)
+            .single();
+          originalData = data;
+        }
+        
         return async () => {
-          console.log(`Compensating update on ${op.table}`);
+          if (originalData && op.filters?.id) {
+            const { error } = await this.client
+              .from(op.table)
+              .update(originalData)
+              .eq('id', op.filters.id);
+            
+            if (error) {
+              console.error(`[Rollback] Failed to restore ${op.table}.${op.filters.id}:`, error);
+              throw error;
+            }
+            console.log(`[Rollback] Restored ${op.table}.${op.filters.id}`);
+          }
         };
       }
       case 'delete': {
         // Compensating: re-insert the deleted record
-        // We'd need to store the original data
+        // Store the data being deleted
+        let deletedData: Record<string, unknown> | null = null;
+        
+        if (op.filters?.id) {
+          const { data } = await this.client
+            .from(op.table)
+            .select('*')
+            .eq('id', op.filters.id)
+            .single();
+          deletedData = data;
+        }
+        
         return async () => {
-          console.log(`Compensating delete on ${op.table}`);
+          if (deletedData) {
+            const { error } = await this.client
+              .from(op.table)
+              .insert(deletedData);
+            
+            if (error) {
+              console.error(`[Rollback] Failed to re-insert into ${op.table}:`, error);
+              throw error;
+            }
+            console.log(`[Rollback] Re-inserted into ${op.table}`);
+          }
         };
       }
       default:
@@ -460,17 +516,17 @@ export class SupabaseProvider implements IDatabaseProvider {
     
     if (error) {
       return [
-        'users', 'sessions', 'otp_codes', 'user_verifications',
+        'profiles', 'sessions', 'otp_codes', 'user_verifications',
         'companies', 'company_employees', 'company_invitations',
         'destinations', 'activities', 'tours',
-        'products', 'carts', 'cart_items',
+        'products', 'cart', 'cart_items',
         'topics', 'replies',
         'bookings', 'services',
         'orders', 'order_items',
         'escrows', 'escrow_transactions',
         'disputes', 'dispute_messages', 'dispute_timeline',
         'reviews', 'review_photos', 'review_helpful', 'review_replies',
-        'wishlist_items', 'reviewer_profiles',
+        'wishlist', 'reviewer_profiles',
       ];
     }
     

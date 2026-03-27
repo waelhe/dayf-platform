@@ -1,17 +1,16 @@
 /**
- * GET /api/disputes - قائمة المنازعات
- * POST /api/disputes - إنشاء منازعة جديدة
+ * Disputes API Route - GET/POST /api/disputes
+ *
+ * GET: قائمة المنازعات (المستخدم يرى منازعاته، Admin يرى الكل)
+ * POST: إنشاء منازعة جديدة
+ *
+ * Security: يستخدم getAuthUser() للتحقق من المصادقة
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { DisputeService, CreateDisputeInput } from '@/features/disputes/infrastructure/dispute-service';
-import { DisputeStatus, DisputeType } from '@/core/types/enums';
-
-async function getCurrentUser(request: NextRequest): Promise<{ id: string; role: string } | null> {
-  const sessionToken = request.cookies.get('session_token')?.value;
-  if (!sessionToken) return null;
-  return null; // TODO: التحقق من الجلسة الفعلية
-}
+import { DisputeStatus, DisputeType, Role } from '@/core/types/enums';
+import { getAuthUser, AuthError } from '@/lib/auth/middleware';
 
 /**
  * GET /api/disputes
@@ -19,11 +18,12 @@ async function getCurrentUser(request: NextRequest): Promise<{ id: string; role:
  */
 export async function GET(request: NextRequest) {
   try {
-    const user = await getCurrentUser(request);
-    
+    // ✅ SECURITY: استخدام getAuthUser الفعلي
+    const user = await getAuthUser(request);
+
     if (!user) {
       return NextResponse.json(
-        { error: 'غير مصرح' },
+        { error: 'غير مصادق - يرجى تسجيل الدخول' },
         { status: 401 }
       );
     }
@@ -32,7 +32,8 @@ export async function GET(request: NextRequest) {
     const status = searchParams.get('status') as DisputeStatus | null;
 
     // المدير يرى كل المنازعات
-    if (user.role === 'ADMIN') {
+    const isAdmin = user.role === Role.ADMIN || user.role === Role.SUPER_ADMIN;
+    if (isAdmin) {
       const page = parseInt(searchParams.get('page') || '1');
       const limit = parseInt(searchParams.get('limit') || '20');
       const result = await DisputeService.listAllDisputes(status ?? undefined, page, limit);
@@ -44,6 +45,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ disputes });
   } catch (error) {
     console.error('Error fetching disputes:', error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode });
+    }
+
     return NextResponse.json(
       { error: 'حدث خطأ أثناء جلب المنازعات' },
       { status: 500 }
@@ -57,17 +63,18 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const user = await getCurrentUser(request);
-    
+    // ✅ SECURITY: استخدام getAuthUser الفعلي
+    const user = await getAuthUser(request);
+
     if (!user) {
       return NextResponse.json(
-        { error: 'غير مصرح' },
+        { error: 'غير مصادق - يرجى تسجيل الدخول' },
         { status: 401 }
       );
     }
 
     const body = await request.json();
-    
+
     // التحقق من البيانات المطلوبة
     const requiredFields = ['escrowId', 'referenceType', 'referenceId', 'againstUser', 'type', 'reason', 'description'];
     for (const field of requiredFields) {
@@ -88,7 +95,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // إنشاء المنازعة
+    // ✅ SECURITY: openedBy من الجلسة فقط
     const disputeInput: CreateDisputeInput = {
       escrowId: body.escrowId,
       referenceType: body.referenceType,
@@ -106,6 +113,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ dispute }, { status: 201 });
   } catch (error) {
     console.error('Error creating dispute:', error);
+
+    if (error instanceof AuthError) {
+      return NextResponse.json({ error: error.message }, { status: error.statusCode });
+    }
+
     const errorMessage = error instanceof Error ? error.message : 'حدث خطأ أثناء إنشاء المنازعة';
     return NextResponse.json(
       { error: errorMessage },

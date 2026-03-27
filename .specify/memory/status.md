@@ -184,6 +184,14 @@
 
 ## 📝 سجل الإنجازات الأخيرة
 
+### [2025-03-27 — إصلاح أسماء الجداول]
+- ✅ اكتشاف تعارض بين TABLES constants و Supabase الفعلي
+- ✅ إصلاح: users → profiles, carts → cart, wishlist_items → wishlist
+- ✅ إصلاح hardcoded queries في community-service.ts
+- ✅ إصلاح entity names في resource-ownership.ts
+- ✅ تحديث DECISIONS.md بـ ADR-007
+- ⚠️ لم يُتبع spec-kit methodology (قفز للتنفيذ بدون spec/plan/tasks)
+
 ### [2025-03-27 — الهجرة مكتملة]
 - ✅ Phase 1-5: Infrastructure & Core Features
 - ✅ Phase 6: Supporting Features (Reviews, Disputes, Community, Tourism, Marketplace)

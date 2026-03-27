@@ -111,6 +111,36 @@
 
 ---
 
+### ADR-007: أسماء جداول Supabase الفعلية
+
+**التاريخ:** 2025-03-27
+**الحالة:** ✅ مُطبق
+
+**القرار:** استخدام أسماء الجداول الفعلية في Supabase PostgreSQL بدلاً من أسماء Prisma Schema.
+
+**السبب:** 
+- Prisma Schema كان يستخدم `users`, `carts`, `wishlist_items`
+- Supabase الفعلي يستخدم `profiles`, `cart`, `wishlist`
+- هذا التعارض سبب فشل جميع العمليات على هذه الجداول
+
+**التغييرات:**
+```
+TABLES.USERS:        'users'        → 'profiles'
+TABLES.CARTS:        'carts'        → 'cart'
+TABLES.WISHLIST_ITEMS: 'wishlist_items' → 'wishlist'
+```
+
+**المقايضة:** أسماء مختلفة عن Prisma Schema التاريخي، لكن الكود لا يستخدم Prisma بعد Phase 8.
+
+**الأثر:** 
+- ✅ إصلاح UserRepository
+- ✅ إصلاح CartRepository  
+- ✅ إصلاح WishlistRepository
+- ✅ إصلاح community-service.ts
+- ✅ إصلاح resource-ownership.ts
+
+---
+
 ## القرارات المعلقة (Pending Decisions)
 
 ---
