@@ -14,7 +14,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { updateBookingStatus, getBookingById } from '@/features/bookings';
+import { confirmBooking, completeBooking, cancelBooking, getBookingById } from '@/features/bookings';
 import { BookingStatus } from '@/core/types/enums';
 import { getAuthUser, AuthError } from '@/lib/auth/middleware';
 import { verifyOwnership } from '@/core/auth/resource-ownership';
@@ -127,7 +127,24 @@ export async function PATCH(
     }
 
     // تحديث حالة الحجز
-    const updatedBooking = await updateBookingStatus(bookingId, status);
+    let updatedBooking;
+    
+    switch (status) {
+      case 'CONFIRMED':
+        updatedBooking = await confirmBooking(bookingId);
+        break;
+      case 'COMPLETED':
+        updatedBooking = await completeBooking(bookingId);
+        break;
+      case 'CANCELLED':
+        updatedBooking = await cancelBooking(bookingId, user.id);
+        break;
+      default:
+        return NextResponse.json(
+          { error: 'حالة غير مدعومة' },
+          { status: 400 }
+        );
+    }
 
     return NextResponse.json({
       success: true,

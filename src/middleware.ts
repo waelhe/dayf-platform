@@ -5,11 +5,35 @@
  * يعمل قبل كل API request ولا يمكن تجاوزه.
  *
  * المبدأ: Deny by Default (Constitution Article VI)
+ * 
+ * 🏛️ Infrastructure Integration:
+ * - Distributed Rate Limiting (Upstash Redis)
+ * - Fallback to In-Memory when Redis not available
  */
 
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { getRouteProtection, extractResourceId, type RouteLevel } from './core/auth/route-protection';
+
+// Distributed Rate Limiting (with fallback)
+import {
+  getAuthRateLimiter,
+  getOTPRateLimiter,
+  getAPIRateLimiter,
+  getRateLimitKey,
+  checkRateLimit,
+  createRateLimitResponse,
+  isRedisAvailable,
+} from './infrastructure/redis';
+
+// Fallback to in-memory rate limiter
+import {
+  authRateLimiter,
+  otpRateLimiter,
+  apiRateLimiter,
+  applyRateLimit,
+  getRateLimitIdentifier,
+} from './lib/rate-limit';
 
 /**
  * التحقق من JWT token
@@ -62,6 +86,59 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
   // تجاهل المسارات غير API
   if (!pathname.startsWith('/api/')) {
     return NextResponse.next();
+  }
+
+  // ============================================
+  // Rate Limiting (المادة VI - الحماية من الـ abuse)
+  // ============================================
+  
+  // Use distributed rate limiter if Redis is available
+  const useDistributed = isRedisAvailable();
+  const rateLimitKey = useDistributed 
+    ? getRateLimitKey(request) 
+    : getRateLimitIdentifier(request);
+  
+  // حماية خاصة لـ Auth routes
+  if (pathname.startsWith('/api/auth/login') || pathname.startsWith('/api/auth/register')) {
+    if (useDistributed) {
+      const result = await checkRateLimit(getAuthRateLimiter(), rateLimitKey);
+      if (!result.allowed) {
+        return createRateLimitResponse(result.retryAfter || 60);
+      }
+    } else {
+      const rateLimitResult = applyRateLimit(request, authRateLimiter);
+      if (!rateLimitResult.allowed && rateLimitResult.response) {
+        return rateLimitResult.response;
+      }
+    }
+  }
+  
+  // حماية صارمة لـ OTP routes
+  if (pathname.startsWith('/api/auth/otp')) {
+    if (useDistributed) {
+      const result = await checkRateLimit(getOTPRateLimiter(), rateLimitKey);
+      if (!result.allowed) {
+        return createRateLimitResponse(result.retryAfter || 3600);
+      }
+    } else {
+      const rateLimitResult = applyRateLimit(request, otpRateLimiter);
+      if (!rateLimitResult.allowed && rateLimitResult.response) {
+        return rateLimitResult.response;
+      }
+    }
+  }
+  
+  // حماية عامة لجميع API routes
+  if (useDistributed) {
+    const result = await checkRateLimit(getAPIRateLimiter(), rateLimitKey);
+    if (!result.allowed) {
+      return createRateLimitResponse(result.retryAfter || 60);
+    }
+  } else {
+    const apiRateResult = applyRateLimit(request, apiRateLimiter);
+    if (!apiRateResult.allowed && apiRateResult.response) {
+      return apiRateResult.response;
+    }
   }
 
   // الحصول على مستوى الحماية للمسار

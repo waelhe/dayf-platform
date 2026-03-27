@@ -242,13 +242,13 @@ export interface EventMap {
 /**
  * دالة نشر آمنة الأنواع
  * 
- * Note: استيراد eventBus داخل الدالة لتجنب الـ circular dependency
+ * Note: تستخدم eventBus من infrastructure/events
  */
 export async function publishEvent<K extends keyof EventMap>(
   event: K,
   payload: EventMap[K]
 ): Promise<void> {
-  // Dynamic import لتجنب circular dependency
-  const { eventBus } = await import('./index.js');
-  return eventBus.publish(event, payload);
+  // Import from infrastructure events (EventEmitter2)
+  const { publish } = await import('../../infrastructure/events/event-bus');
+  return publish(event, payload as unknown);
 }
